@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BrowserUse Instruction Schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["action", "args"],
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "navigate",
+          "fill",
+          "click",
+          "extract_text",
+          "wait",
+          "scroll",
+          "screenshot"
+        ]
+      },
+      "args": {
+        "type": "object",
+        "anyOf": [
+          {
+            "properties": {
+              "url": { "type": "string", "format": "uri" }
+            },
+            "required": ["url"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "text": { "type": "string" }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "label": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "required": ["label", "text"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "selector": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "required": ["selector", "text"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "selector": { "type": "string" }
+            },
+            "required": ["selector"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "selector": { "type": "string" },
+              "timeout_ms": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["selector", "timeout_ms"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "timeout_ms": { "type": "integer", "minimum": 0 }
+            },
+            "required": ["timeout_ms"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "dx": { "type": "integer" },
+              "dy": { "type": "integer" }
+            },
+            "required": ["dx", "dy"],
+            "additionalProperties": false
+          },
+          {
+            "properties": {
+              "path": { "type": "string" },
+              "selector": { "type": "string" }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "additionalProperties": false
+  }
+}

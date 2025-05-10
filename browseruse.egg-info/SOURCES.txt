@@ -1,0 +1,8 @@
+setup.py
+browseruse/__init__.py
+browseruse/schema_validator.py
+browseruse.egg-info/PKG-INFO
+browseruse.egg-info/SOURCES.txt
+browseruse.egg-info/dependency_links.txt
+browseruse.egg-info/top_level.txt
+tests/test_schema_validator.py
