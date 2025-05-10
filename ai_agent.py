@@ -1,91 +1,143 @@
+#!/usr/bin/env python3
 import os
-import json
 import sys
+import json
+import asyncio
 
-from openai import OpenAI
 import click
 from dotenv import load_dotenv
+from openai import OpenAI
+from playwright.async_api import async_playwright
 
+from agent_functions import FUNCTIONS
 from browseruse.schema_validator import validate_instructions
+from browser_controller import snapshot_page, execute_single
 
-# Load environment variables from .env (expects OPENAI_API_KEY)
+# Load API key
 load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
-    print("Error: OPENAI_API_KEY not set in environment.", file=sys.stderr)
+    print("Error: OPENAI_API_KEY not set.", file=sys.stderr)
     sys.exit(1)
 
-# Instantiate the OpenAI v1 client
+# Instantiate client
 client = OpenAI(api_key=API_KEY)
 
-# System prompt to enforce schema-compliant JSON output with text/label locators
-SYSTEM_PROMPT = """
-You are BrowserUse Agent.
-Translate the user's request into a JSON array strictly following the BrowserUse Instruction Schema.
-For click actions:
-  • Use {"action":"click","args":{"text":"<exact visible link or button text>"}}
-For fill actions:
-  • Use {"action":"fill","args":{"label":"<exact form field label>","text":"<input value>"}}
-Only if text or label lookup is impossible, fall back to a CSS selector:
-  • {"action":"click","args":{"selector":"<CSS selector>"}}
-  • {"action":"fill","args":{"selector":"<CSS selector>","text":"<input value>"}}
-For other actions, use:
-  • navigate:      {"action":"navigate","args":{"url":"<full URL>"}}
-  • wait:          {"action":"wait","args":{"timeout_ms":<integer>}}
-                   or {"action":"wait","args":{"selector":"<CSS selector>","timeout_ms":<integer>"}}
-  • extract_text:  {"action":"extract_text","args":{"selector":"<CSS selector>"}}
-  • scroll:        {"action":"scroll","args":{"dx":<integer>,"dy":<integer>"}}
-  • screenshot:    {"action":"screenshot","args":{"path":"<filename.png>"}}
-                   or {"action":"screenshot","args":{"path":"<filename.png>","selector":"<CSS selector>"}}
+# Autonomous system prompt
+AUTONOMOUS_SYSTEM_PROMPT = """
+You are a self-driving browser agent. Each turn:
+1. I will give you a summary of the current page (forms, fields, links, buttons).
+2. You know my high-level goal.
+3. You must choose exactly ONE function to call next, from FUNCTIONS.
+4. Return a JSON object {"name": "...", "arguments": { ... }} and nothing else.
 
-Output ONLY the JSON array—no markdown, no explanations, no additional keys.
-If you cannot fulfill the request, output an empty array: [].
+Functions:
+- navigate(url)
+- click(text) or click(selector)
+- fill(label,text) or fill(selector,text)
+- wait(timeout_ms) or wait(selector,timeout_ms)
+- extract_text(selector)
+- scroll(dx,dy)
+- screenshot(path) or screenshot(path,selector)
+- done() → signals completion
+
+Do NOT output any explanations or markdown.
 """
 
-def generate_browser_tasks(user_request: str) -> list[dict]:
+async def run_autonomous(
+    user_goal: str,
+    headless: bool = False,
+    slow_mo: int = 250
+) -> list[dict]:
     """
-    Call the OpenAI v1 API to generate browser automation instructions,
-    validate them against our JSON schema, and return the list.
+    Main control loop: observe → reason → act → repeat, until done.
+    Returns list of results from extract_text/screenshot.
     """
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": user_request}
-        ],
-        temperature=0.0,
-        max_tokens=500
-    )
+    messages = [
+        {"role": "system", "content": AUTONOMOUS_SYSTEM_PROMPT}
+    ]
+    results = []
 
-    content = resp.choices[0].message.content
-    try:
-        instructions = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse JSON from model response: {e}\nRaw output:\n{content}")
+    # Launch browser
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=headless, slow_mo=slow_mo)
+        page = await browser.new_page()
 
-    validate_instructions(instructions)
-    return instructions
+        done = False
+        while not done:
+            # 1️⃣ Observe: snapshot the page
+            dom_summary = await snapshot_page(page)
+            messages.append({
+                "role": "assistant",
+                "content": json.dumps(dom_summary)
+            })
+            # 2️⃣ Reason: ask LLM what to do next
+            messages.append({"role": "user", "content": user_goal})
+
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                functions=FUNCTIONS,
+                function_call="auto",
+                temperature=0.0,
+                max_tokens=200
+            )
+            msg = resp.choices[0].message
+            if not msg.function_call:
+                raise RuntimeError("Agent did not call a function")
+
+            name = msg.function_call.name
+            args = json.loads(msg.function_call.arguments)
+
+            # 3️⃣ If done, break
+            if name == "done":
+                done = True
+                continue
+
+            # 4️⃣ Otherwise, execute the single action
+            instr = {"action": name, "args": args}
+            # Validate step
+            validate_instructions([instr])
+            # Execute step
+            try:
+                step_result = await execute_single(page, instr)
+                if step_result is not None:
+                    results.append(step_result)
+            except Exception as e:
+                print(f"[Error executing step {instr}]: {e}", file=sys.stderr)
+
+            # 5️⃣ Feed the function call back into the conversation
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": name,
+                    "arguments": msg.function_call.arguments
+                }
+            })
+
+        # Close browser
+        await browser.close()
+
+    return results
 
 @click.command(context_settings={"ignore_unknown_options": True})
-@click.argument("user_request", nargs=-1)
-def main(user_request):
+@click.argument("user_goal", nargs=-1)
+@click.option("--headless/--show", default=False, help="Run in headless mode")
+@click.option("--slow-mo",     default=250,   help="Delay between actions (ms)")
+def main(user_goal, headless, slow_mo):
     """
-    CLI entrypoint. Describe your browser automation task in plain English.
-    Example:
-      python ai_agent.py "Open example.com, click Sign In, fill Username with alice, Password with secret, then screenshot login.png"
+    Autonomous browser agent. Describe your goal in plain English:
+
+      python ai_agent.py "Go to mujjumujahid.com and fill out the contact form"
     """
-    query = " ".join(user_request).strip()
-    if not query:
-        print("[Error] No user request provided.", file=sys.stderr)
+    goal = " ".join(user_goal).strip()
+    if not goal:
+        print("[Error] No goal provided.", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        tasks = generate_browser_tasks(query)
-    except Exception as e:
-        print(f"[Error] {e}", file=sys.stderr)
-        sys.exit(1)
-
-    print(json.dumps(tasks, indent=2))
+    results = asyncio.run(run_autonomous(goal, headless, slow_mo))
+    print("✅ Final results:", results)
 
 if __name__ == "__main__":
     main()

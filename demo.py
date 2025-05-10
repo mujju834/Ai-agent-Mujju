@@ -1,48 +1,41 @@
 #!/usr/bin/env python3
 import sys
 import click
-from ai_agent import generate_browser_tasks
-from browser_controller import run
+import asyncio
+from ai_agent import run_autonomous
 
 @click.command(context_settings={"ignore_unknown_options": True})
-@click.argument("user_request", nargs=-1)
-def main(user_request):
+@click.argument("user_goal", nargs=-1)
+@click.option("--headless/--show", default=False, help="Run in headless mode")
+@click.option("--slow-mo",     default=300,   help="Delay between actions (ms)")
+def main(user_goal, headless, slow_mo):
     """
-    Describe your task in plain English. Examples:
-      python demo.py
-      python demo.py "Open mujjumujahid.com, click Contact, fill Name with John Doe, Email with john.doe@example.com, Message with Hello, wait 2 seconds between actions, then screenshot form_submission.png"
+    Autonomous demo: Describe your goal in plain English, and watch the agent
+    navigate, click, fill, wait, screenshot, etc., until completion.
+
+    Examples:
+      python demo.py "Go to mujjumujahid.com and fill in the contact form and submit it"
+      python demo.py --show --slow-mo 500 "Log into Gmail and list unread subjects"
     """
-    if user_request:
-        query = " ".join(user_request)
+    # Reconstruct the goal string (or fallback to a sensible default)
+    if user_goal:
+        goal = " ".join(user_goal).strip()
     else:
-        query = (
-            "Open mujjumujahid.com, click Contact, "
-            "fill Name with Mujju millionaire, Email with mujjumillionaire@gmail.com, then click Next then"
-            "Message with Mujju is a millionaire within 3 days,then click Send Message "
-            "wait for 2 seconds between each action, then screenshot form_submission.png"
-        )
+        goal = "Go to mujjumujahid.com and fill in the contact form and submit it twice with different names and different details for two people"
 
-    print(f"\n🔍 Interpreting task: {query}\n")
+    print(f"\n🔍 USER GOAL: {goal}\n")
+    print(f"▶️ Starting autonomous execution (headless={headless}, slowMo={slow_mo}ms)…\n")
 
     try:
-        tasks = generate_browser_tasks(query)
+        # This will print each function call as it happens
+        results = asyncio.run(run_autonomous(goal, headless=headless, slow_mo=slow_mo))
     except Exception as e:
-        print(f"[Error generating tasks] {e}", file=sys.stderr)
+        print(f"\n[Error] {e}", file=sys.stderr)
         sys.exit(1)
 
-    print("📝 Generated Instructions:")
-    for i, step in enumerate(tasks, 1):
-        print(f"  {i}. {step}")
-    print()
-
-    print("▶️ Executing in browser (headful, slowMo=300ms)…\n")
-    try:
-        results = run(tasks, headless=False, slow_mo=300)
-    except Exception as e:
-        print(f"[Error executing tasks] {e}", file=sys.stderr)
-        sys.exit(1)
-
-    print("\n✅ Execution Results:", results)
+    print("\n✅ ALL DONE! Collected results:")
+    for r in results:
+        print("  •", r)
 
 if __name__ == "__main__":
     main()
