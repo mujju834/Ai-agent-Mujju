@@ -21,7 +21,7 @@ def main(user_goal, headless, slow_mo):
     if user_goal:
         goal = " ".join(user_goal).strip()
     else:
-        goal = "Go to mujjumujahid.com and fill in the contact form and submit it twice with different names and different details for two people"
+        goal = "Go to mujjumujahid.com and fill in the contact form fill it two times first time the information should be of a hollywood actress and second time the information should be of a british actress and then end the operation"
 
     print(f"\n🔍 USER GOAL: {goal}\n")
     print(f"▶️ Starting autonomous execution (headless={headless}, slowMo={slow_mo}ms)…\n")

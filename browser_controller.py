@@ -51,6 +51,19 @@ async def snapshot_page(page: Page) -> Dict[str, Any]:
 
     return summary
 
+async def _highlight(page: Page, handle) -> None:
+    """
+    Draw a red outline around the given element for 0.5s so you can see it.
+    """
+    await page.evaluate(
+        """element => {
+             const prior = element.style.outline;
+             element.style.outline = '3px solid red';
+             setTimeout(() => element.style.outline = prior, 500);
+           }""",
+        handle
+    )
+
 async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Execute exactly one instruction on the given Playwright page.
@@ -77,45 +90,30 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
 
         # 1️⃣ text-first attempts
         if text:
-            # try exact text
-            try:
-                btn = page.get_by_text(text, exact=True).first
-                await btn.wait_for(state="visible", timeout=5000)
-                await btn.click()
-                clicked = True
-            except PlaywrightTimeoutError:
-                pass
-            # try button role
-            if not clicked:
+            for getter in (
+                lambda: page.get_by_text(text, exact=True).first,
+                lambda: page.get_by_role("button", name=text),
+                lambda: page.get_by_role("link", name=text)
+            ):
                 try:
-                    btn = page.get_by_role("button", name=text)
-                    await btn.click()
+                    elm = getter()
+                    await elm.wait_for(state="visible", timeout=5000)
+                    handle = await elm.element_handle()
+                    if handle:
+                        await _highlight(page, handle)
+                    await elm.click()
                     clicked = True
+                    break
                 except Exception:
-                    pass
-            # try link role
-            if not clicked:
-                try:
-                    link = page.get_by_role("link", name=text)
-                    await link.click()
-                    clicked = True
-                except Exception:
-                    pass
-            # try fallback locator
-            if not clicked:
-                try:
-                    loc = page.locator(f"button:has-text(\"{text}\")").first
-                    await loc.click()
-                    clicked = True
-                except Exception:
-                    pass
+                    continue
 
         # 2️⃣ selector-fallback
         if not clicked and selector:
             try:
-                el = await page.wait_for_selector(selector, timeout=5000)
-                await el.scroll_into_view_if_needed()
-                await el.click()
+                handle = await page.wait_for_selector(selector, timeout=5000)
+                await handle.scroll_into_view_if_needed()
+                await _highlight(page, handle)
+                await handle.click()
                 clicked = True
             except PlaywrightTimeoutError:
                 pass
@@ -126,7 +124,7 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
 
     if action == "fill":
         filled = False
-        text = args.get("text")
+        text = args.get("text", "")
         label = args.get("label")
         selector = args.get("selector")
 
@@ -135,6 +133,9 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
             try:
                 fld = page.get_by_label(label)
                 await fld.wait_for(state="visible", timeout=5000)
+                handle = await fld.element_handle()
+                if handle:
+                    await _highlight(page, handle)
                 await fld.fill(text)
                 filled = True
             except PlaywrightTimeoutError:
@@ -145,6 +146,7 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
             try:
                 fld = await page.wait_for_selector(selector, timeout=5000)
                 await fld.scroll_into_view_if_needed()
+                await _highlight(page, fld)
                 await fld.fill(text)
                 filled = True
             except PlaywrightTimeoutError:
@@ -155,6 +157,7 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
             sel = f"[name='{label}']"
             try:
                 fld = await page.wait_for_selector(sel, timeout=5000)
+                await _highlight(page, fld)
                 await fld.fill(text)
                 filled = True
             except PlaywrightTimeoutError:
@@ -172,8 +175,9 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
         path = args["path"]
         if "selector" in args:
             try:
-                el = await page.wait_for_selector(args["selector"], timeout=5000)
-                await el.screenshot(path=path)
+                handle = await page.wait_for_selector(args["selector"], timeout=5000)
+                await _highlight(page, handle)
+                await handle.screenshot(path=path)
             except PlaywrightTimeoutError:
                 print(f"[Warning] Screenshot selector failed: {args['selector']}")
         else:
@@ -183,8 +187,9 @@ async def execute_single(page: Page, instr: Dict[str, Any]) -> Optional[Dict[str
     if action == "extract_text":
         sel = args["selector"]
         try:
-            el = await page.wait_for_selector(sel, timeout=5000)
-            text = await el.text_content()
+            handle = await page.wait_for_selector(sel, timeout=5000)
+            await _highlight(page, handle)
+            text = await handle.text_content()
             return {"extracted_text": text}
         except PlaywrightTimeoutError:
             print(f"[Warning] extract_text selector failed: {sel}")
